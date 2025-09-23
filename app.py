@@ -1,47 +1,37 @@
 import streamlit as st
 import pandas as pd
 import re
-from langchain.vectorstores import FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.schema import Document
+import numpy as np
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # ---------------------------
-# Load FAISS index & dataset
+# Load dataset and embeddings
 # ---------------------------
 @st.cache_resource
 def load_resources():
-    # Load embeddings model
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-
-    # Load FAISS vector store
-    vector_db = FAISS.load_local("geeta_faiss_index", embeddings)
-
-    # Load dataset for direct verse lookup
+    # Load dataset
     df = pd.read_csv("geeta_dataset.csv")
+    df['chapter'] = df['chapter'].astype(int)
+    df['verse'] = df['verse'].astype(int)
+    df['sanskrit'] = df['sanskrit'].astype(str).str.strip()
+    df['english'] = df['english'].astype(str).str.strip()
+
+    # Create verse dictionary for direct lookup
     verse_dict = {
-        (int(r.chapter), int(r.verse)): Document(
-            page_content=r.english,
-            metadata={
-                "chapter": int(r.chapter),
-                "verse": int(r.verse),
-                "sanskrit": r.sanskrit.strip(),
-                "english": r.english.strip(),
-                "id": f"{r.chapter}.{r.verse}"
-            }
-        )
-        for _, r in df.iterrows()
+        (row.chapter, row.verse): row
+        for _, row in df.iterrows()
     }
 
-    # Use sentence-transformers model for lightweight text generation / semantic search
+    # Initialize embeddings model
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    return vector_db, verse_dict, model
+    # Compute embeddings for all verses
+    embeddings = model.encode(df['english'].tolist(), convert_to_numpy=True)
 
+    return df, verse_dict, model, embeddings
 
-vector_db, verse_dict, model = load_resources()
+df, verse_dict, model, verse_embeddings = load_resources()
 
 
 # ---------------------------
@@ -50,9 +40,7 @@ vector_db, verse_dict, model = load_resources()
 def clean_response(text: str) -> str:
     text = re.sub(r"Please.*", "", text, flags=re.I)
     text = re.sub(r"(🙏\s*){2,}", "🙏", text)
-    text = re.sub(
-        r"(May this wisdom guide you[^\n]*){2,}", "May this wisdom guide you. 🙏"
-    )
+    text = re.sub(r"(May this wisdom guide you[^\n]*){2,}", "May this wisdom guide you. 🙏")
     return text.strip()
 
 
@@ -60,31 +48,35 @@ def geeta_gpt(query: str) -> str:
     # Direct Chapter/Verse lookup
     verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
     if verse_pattern:
-        chapter, verse = verse_pattern.groups()
-        chapter, verse = int(chapter), int(verse)
+        chapter, verse = map(int, verse_pattern.groups())
         if (chapter, verse) in verse_dict:
-            d = verse_dict[(chapter, verse)].metadata
+            row = verse_dict[(chapter, verse)]
             return f"""**Chapter {chapter}, Verse {verse}**
 
 📜 Sanskrit:
-{d['sanskrit']}
+{row.sanskrit}
 
 🌍 Translation:
-{d['english']}
+{row.english}
 
 🕉️ Krishna’s Guidance:
 My dear Arjuna, perform your duty with sincerity but remain unattached to results. 🙏"""
 
-    # Semantic search for general queries
-    docs_with_scores = vector_db.similarity_search_with_score(query, k=5)
-    relevant_docs = [d for d, score in docs_with_scores if score >= 0.6]
+    # Semantic search
+    query_embedding = model.encode([query], convert_to_numpy=True)
+    similarities = cosine_similarity(query_embedding, verse_embeddings)[0]
+    top_indices = similarities.argsort()[::-1][:5]  # top 5
 
-    if relevant_docs:
+    relevant_verses = [
+        df.iloc[i] for i in top_indices if similarities[i] >= 0.6
+    ]
+
+    if relevant_verses:
         verses_context = "\n\n".join(
             [
-                f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
-                f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
-                for d in relevant_docs
+                f"[Chapter {row.chapter}, Verse {row.verse}]\n"
+                f"Sanskrit: {row.sanskrit}\nEnglish: {row.english}"
+                for row in relevant_verses
             ]
         )
         answer = (
@@ -102,9 +94,7 @@ My dear Arjuna, perform your duty with sincerity but remain unattached to result
 # Streamlit UI
 # ---------------------------
 st.title("🕉️ GeetaGPT")
-st.write(
-    "Ask any question from the Bhagavad Gita or provide Chapter & Verse (e.g., 'Chapter 2, Verse 47')"
-)
+st.write("Ask any question from the Bhagavad Gita or provide Chapter & Verse (e.g., 'Chapter 2, Verse 47')")
 
 query = st.text_input("Your Question")
 if st.button("Ask"):
