@@ -1,4 +1,4 @@
-%%writefile app.py
+
 import streamlit as st
 import pandas as pd
 import re
@@ -89,3 +89,4 @@ if st.button("Ask"):
     if query.strip():
         response = geeta_gpt(query)
         st.markdown(response)
+
