@@ -1,7 +1,8 @@
+langchain
+langchain-community
 streamlit
 pandas
 transformers>=4.40
-langchain
 faiss-cpu
 sentence-transformers
-torch  # for GPU support if using cuda
+torch
