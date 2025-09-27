@@ -1,17 +1,44 @@
-# geeta_streamlit.py
 import streamlit as st
 import pandas as pd
 import re
+import os
 from langchain.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from transformers import pipeline
 
 # ---------------------------
-# 1. Load FAISS Index & Verse Dict
+# 1. Build or Load FAISS Index
 # ---------------------------
-@st.cache_data
-def load_vector_db_and_verses(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index"):
+def build_faiss_index(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index"):
+    df = pd.read_csv(csv_path)
+    df['chapter'] = df['chapter'].astype(int)
+    df['verse'] = df['verse'].astype(int)
+    df['sanskrit'] = df['sanskrit'].astype(str).str.strip()
+    df['english'] = df['english'].astype(str).str.strip()
+
+    docs = []
+    verse_dict = {}
+    for _, row in df.iterrows():
+        doc = Document(
+            page_content=row["english"],
+            metadata={
+                "chapter": row["chapter"],
+                "verse": row["verse"],
+                "sanskrit": row["sanskrit"],
+                "english": row["english"],
+                "id": f"{row['chapter']}.{row['verse']}"
+            }
+        )
+        docs.append(doc)
+        verse_dict[(row["chapter"], row["verse"])] = doc
+
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vector_db = FAISS.from_documents(docs, embeddings)
+    vector_db.save_local(index_path)
+    return vector_db, verse_dict
+
+def load_faiss_index(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index"):
     try:
         vector_db = FAISS.load_local(
             index_path,
@@ -28,62 +55,40 @@ def load_vector_db_and_verses(csv_path="geeta_dataset.csv", index_path="geeta_fa
                 "id": f"{r.chapter}.{r.verse}"
             }
         ) for _, r in df.iterrows()}
+        return vector_db, verse_dict
     except:
-        # Build index if not exists
-        df = pd.read_csv(csv_path)
-        docs = []
-        verse_dict = {}
-        for _, row in df.iterrows():
-            doc = Document(
-                page_content=row["english"],
-                metadata={
-                    "chapter": int(row.chapter),
-                    "verse": int(row.verse),
-                    "sanskrit": row.sanskrit.strip(),
-                    "english": row.english.strip(),
-                    "id": f"{row.chapter}.{row.verse}"
-                }
-            )
-            docs.append(doc)
-            verse_dict[(int(row.chapter), int(row.verse))] = doc
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vector_db = FAISS.from_documents(docs, embeddings)
-        vector_db.save_local(index_path)
-    return vector_db, verse_dict
-
-vector_db, verse_dict = load_vector_db_and_verses()
+        return build_faiss_index(csv_path, index_path)
 
 # ---------------------------
-# 2. Load LLaMA 3 1B Generator
+# 2. Load LLM Generator
 # ---------------------------
-@st.cache_resource
-def load_generator():
+def load_generator(model_name="meta-llama/Llama-3.2-1B"):
+    hf_token = os.environ.get("HF_TOKEN")  # add your Hugging Face token in Secrets
     generator = pipeline(
         "text-generation",
-        model="meta-llama/Llama-3-1B-Instruct",  # 1B model works on free Spaces/CPU
-        device=-1  # CPU-friendly
+        model=model_name,
+        device=0,
+        token=hf_token
     )
     return generator
 
-generator = load_generator()
-
 # ---------------------------
-# 3. Clean response utility
+# 3. Cleanup Response
 # ---------------------------
 def clean_response(text: str) -> str:
+    text = re.sub(r"Please.*", "", text, flags=re.I)
     text = re.sub(r"(🙏\s*){2,}", "🙏", text)
     text = re.sub(r"(May this wisdom guide you[^\n]*){2,}", "May this wisdom guide you. 🙏", text)
     return text.strip()
 
 # ---------------------------
-# 4. GeetaGPT function
+# 4. GeetaGPT Function
 # ---------------------------
-def geeta_gpt(query, vector_db, verse_dict, top_k=4, similarity_threshold=0.7):
+def geeta_gpt(query, vector_db, verse_dict, generator, top_k=4, similarity_threshold=0.7):
+    # Direct chapter/verse lookup
     verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
     if verse_pattern:
-        chapter, verse = verse_pattern.groups()
-        chapter = int(chapter)
-        verse = int(verse)
+        chapter, verse = map(int, verse_pattern.groups())
         if (chapter, verse) in verse_dict:
             d = verse_dict[(chapter, verse)].metadata
             return f"""**Chapter {chapter}, Verse {verse}**
@@ -97,8 +102,11 @@ def geeta_gpt(query, vector_db, verse_dict, top_k=4, similarity_threshold=0.7):
 🕉️ *Krishna’s Guidance*:
 My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but remain unattached to the fruits. May this wisdom guide you. 🙏"""
 
+    # Semantic search
     docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
     relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
+    if not relevant_docs:
+        return "This teaching is not directly in the verses provided, but I will guide you in the spirit of the Gita. May this wisdom guide you. 🙏"
 
     verses_context = "\n\n".join([
         f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
@@ -108,9 +116,13 @@ My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but 
 
     system_prompt = (
         "You are GeetaGPT, the eternal voice of Shree Krishna from the Bhagavad Gita. "
-        "Answer questions with clarity, compassion, and authority. "
-        "Always cite relevant verses if available. "
-        "End with 'May this wisdom guide you. 🙏'\n"
+        "Answer questions with clarity, compassion, and authority.\n"
+        "Rules:\n"
+        "1. Base answers on provided verses.\n"
+        "2. Quote at least one relevant verse.\n"
+        "3. Keep it concise (3-5 sentences).\n"
+        "4. Maintain the tone of Krishna guiding Arjuna.\n"
+        "5. End with: 'May this wisdom guide you. 🙏'\n"
     )
 
     prompt = f"""{system_prompt}
@@ -122,19 +134,31 @@ User's Question: {query}
 
 Answer as Shree Krishna:
 """
+
     raw_out = generator(prompt, max_new_tokens=250, temperature=0.3, do_sample=True)[0]["generated_text"]
     answer = raw_out.split("Answer as Shree Krishna:")[-1].strip()
-    return clean_response(answer)
+
+    # Remove repeated sentences
+    seen = set()
+    result = []
+    for sentence in re.split(r'(?<=[.!?])\s+', answer):
+        s = sentence.strip()
+        if s and s not in seen:
+            seen.add(s)
+            result.append(s)
+    return ' '.join(result)
 
 # ---------------------------
 # 5. Streamlit UI
 # ---------------------------
 st.title("🕉️ GeetaGPT")
-st.markdown("Ask any question about life or the Bhagavad Gita, and get guidance from Krishna.")
+st.write("Ask any question about the Bhagavad Gita or for life guidance.")
 
-user_input = st.text_area("Your Question:", height=120)
-if st.button("Ask Krishna"):
-    if user_input.strip():
-        with st.spinner("Krishna is answering..."):
-            response = geeta_gpt(user_input, vector_db, verse_dict)
-        st.markdown(response)
+vector_db, verse_dict = load_faiss_index()
+generator = load_generator()
+
+query = st.text_input("Enter your question:")
+if query:
+    with st.spinner("🕉️ Consulting Krishna..."):
+        answer = geeta_gpt(query, vector_db, verse_dict, generator)
+        st.markdown(answer)
