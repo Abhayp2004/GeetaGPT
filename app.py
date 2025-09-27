@@ -1,103 +1,140 @@
+# geeta_streamlit.py
 import streamlit as st
 import pandas as pd
 import re
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from langchain.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.schema import Document
+from transformers import pipeline
 
 # ---------------------------
-# Load dataset and embeddings
+# 1. Load FAISS Index & Verse Dict
+# ---------------------------
+@st.cache_data
+def load_vector_db_and_verses(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index"):
+    try:
+        vector_db = FAISS.load_local(
+            index_path,
+            HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        )
+        df = pd.read_csv(csv_path)
+        verse_dict = {(int(r.chapter), int(r.verse)): Document(
+            page_content=r.english,
+            metadata={
+                "chapter": int(r.chapter),
+                "verse": int(r.verse),
+                "sanskrit": r.sanskrit.strip(),
+                "english": r.english.strip(),
+                "id": f"{r.chapter}.{r.verse}"
+            }
+        ) for _, r in df.iterrows()}
+    except:
+        # Build index if not exists
+        df = pd.read_csv(csv_path)
+        docs = []
+        verse_dict = {}
+        for _, row in df.iterrows():
+            doc = Document(
+                page_content=row["english"],
+                metadata={
+                    "chapter": int(row.chapter),
+                    "verse": int(row.verse),
+                    "sanskrit": row.sanskrit.strip(),
+                    "english": row.english.strip(),
+                    "id": f"{row.chapter}.{row.verse}"
+                }
+            )
+            docs.append(doc)
+            verse_dict[(int(row.chapter), int(row.verse))] = doc
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vector_db = FAISS.from_documents(docs, embeddings)
+        vector_db.save_local(index_path)
+    return vector_db, verse_dict
+
+vector_db, verse_dict = load_vector_db_and_verses()
+
+# ---------------------------
+# 2. Load LLaMA 3 1B Generator
 # ---------------------------
 @st.cache_resource
-def load_resources():
-    # Load dataset
-    df = pd.read_csv("geeta_dataset.csv")
-    df['chapter'] = df['chapter'].astype(int)
-    df['verse'] = df['verse'].astype(int)
-    df['sanskrit'] = df['sanskrit'].astype(str).str.strip()
-    df['english'] = df['english'].astype(str).str.strip()
+def load_generator():
+    generator = pipeline(
+        "text-generation",
+        model="meta-llama/Llama-3-1B-Instruct",  # 1B model works on free Spaces/CPU
+        device=-1  # CPU-friendly
+    )
+    return generator
 
-    # Create verse dictionary for direct lookup
-    verse_dict = {
-        (row.chapter, row.verse): row
-        for _, row in df.iterrows()
-    }
-
-    # Initialize embeddings model
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-    # Compute embeddings for all verses
-    embeddings = model.encode(df['english'].tolist(), convert_to_numpy=True)
-
-    return df, verse_dict, model, embeddings
-
-df, verse_dict, model, verse_embeddings = load_resources()
-
+generator = load_generator()
 
 # ---------------------------
-# Helper functions
+# 3. Clean response utility
 # ---------------------------
 def clean_response(text: str) -> str:
-    text = re.sub(r"Please.*", "", text, flags=re.I)
     text = re.sub(r"(🙏\s*){2,}", "🙏", text)
-    text = re.sub(r"(May this wisdom guide you[^\n]*){2,}", "May this wisdom guide you. 🙏")
+    text = re.sub(r"(May this wisdom guide you[^\n]*){2,}", "May this wisdom guide you. 🙏", text)
     return text.strip()
 
-
-def geeta_gpt(query: str) -> str:
-    # Direct Chapter/Verse lookup
+# ---------------------------
+# 4. GeetaGPT function
+# ---------------------------
+def geeta_gpt(query, vector_db, verse_dict, top_k=4, similarity_threshold=0.7):
     verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
     if verse_pattern:
-        chapter, verse = map(int, verse_pattern.groups())
+        chapter, verse = verse_pattern.groups()
+        chapter = int(chapter)
+        verse = int(verse)
         if (chapter, verse) in verse_dict:
-            row = verse_dict[(chapter, verse)]
+            d = verse_dict[(chapter, verse)].metadata
             return f"""**Chapter {chapter}, Verse {verse}**
 
-📜 Sanskrit:
-{row.sanskrit}
+📜 *Sanskrit*:
+{d.get('sanskrit', 'Sanskrit text unavailable')}
 
-🌍 Translation:
-{row.english}
+🌍 *Translation*:
+{d.get('english', 'English translation unavailable')}
 
-🕉️ Krishna’s Guidance:
-My dear Arjuna, perform your duty with sincerity but remain unattached to results. 🙏"""
+🕉️ *Krishna’s Guidance*:
+My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but remain unattached to the fruits. May this wisdom guide you. 🙏"""
 
-    # Semantic search
-    query_embedding = model.encode([query], convert_to_numpy=True)
-    similarities = cosine_similarity(query_embedding, verse_embeddings)[0]
-    top_indices = similarities.argsort()[::-1][:5]  # top 5
+    docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
+    relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
 
-    relevant_verses = [
-        df.iloc[i] for i in top_indices if similarities[i] >= 0.6
-    ]
+    verses_context = "\n\n".join([
+        f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
+        f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
+        for d in relevant_docs
+    ])
 
-    if relevant_verses:
-        verses_context = "\n\n".join(
-            [
-                f"[Chapter {row.chapter}, Verse {row.verse}]\n"
-                f"Sanskrit: {row.sanskrit}\nEnglish: {row.english}"
-                for row in relevant_verses
-            ]
-        )
-        answer = (
-            f"My dear friend, here are relevant verses from the Bhagavad Gita:\n\n"
-            f"{verses_context}\n\n"
-            f"Reflect on them and perform your duty without attachment. May this wisdom guide you. 🙏"
-        )
-    else:
-        answer = "My dear friend, meditate on your duty, act selflessly, and remain unattached to results. 🙏"
+    system_prompt = (
+        "You are GeetaGPT, the eternal voice of Shree Krishna from the Bhagavad Gita. "
+        "Answer questions with clarity, compassion, and authority. "
+        "Always cite relevant verses if available. "
+        "End with 'May this wisdom guide you. 🙏'\n"
+    )
 
+    prompt = f"""{system_prompt}
+
+Context (Bhagavad Gita verses):
+{verses_context}
+
+User's Question: {query}
+
+Answer as Shree Krishna:
+"""
+    raw_out = generator(prompt, max_new_tokens=250, temperature=0.3, do_sample=True)[0]["generated_text"]
+    answer = raw_out.split("Answer as Shree Krishna:")[-1].strip()
     return clean_response(answer)
 
-
 # ---------------------------
-# Streamlit UI
+# 5. Streamlit UI
 # ---------------------------
 st.title("🕉️ GeetaGPT")
-st.write("Ask any question from the Bhagavad Gita or provide Chapter & Verse (e.g., 'Chapter 2, Verse 47')")
+st.markdown("Ask any question about life or the Bhagavad Gita, and get guidance from Krishna.")
 
-query = st.text_input("Your Question")
-if st.button("Ask"):
-    if query.strip():
-        response = geeta_gpt(query)
+user_input = st.text_area("Your Question:", height=120)
+if st.button("Ask Krishna"):
+    if user_input.strip():
+        with st.spinner("Krishna is answering..."):
+            response = geeta_gpt(user_input, vector_db, verse_dict)
         st.markdown(response)
