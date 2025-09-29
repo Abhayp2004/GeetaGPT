@@ -82,7 +82,7 @@ def clean_response(text: str) -> str:
 # ---------------------------
 # 4. GeetaGPT Logic
 # ---------------------------
- def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
+def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
     # Direct chapter/verse lookup
     verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
     if verse_pattern:
@@ -147,6 +147,7 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
         st.markdown(answer)
+
 
 
 
