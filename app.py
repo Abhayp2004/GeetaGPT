@@ -124,12 +124,8 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    # Use HF InferenceClient correctly
-    result = client.text_generation(
-        model=model_name,
-        inputs=prompt,
-        max_new_tokens=250
-    )
+    # Correct usage: prompt as first positional argument
+    result = client.text_generation(prompt, max_new_tokens=250)
 
     # The API returns a list of dicts with 'generated_text'
     if isinstance(result, list) and "generated_text" in result[0]:
@@ -138,6 +134,7 @@ Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. �
         raw_text = str(result)
 
     return clean_response(raw_text)
+
 
 # ---------------------------
 # 5. Streamlit UI
@@ -153,3 +150,4 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
         st.markdown(answer)
+
