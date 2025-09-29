@@ -82,9 +82,37 @@ def clean_response(text: str) -> str:
 # ---------------------------
 # 4. GeetaGPT Logic
 # ---------------------------
-def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
-    # Chapter/verse lookup (same as before)
-    # ...
+ def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
+    # Direct chapter/verse lookup
+    verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
+    if verse_pattern:
+        chapter, verse = map(int, verse_pattern.groups())
+        if (chapter, verse) in verse_dict:
+            d = verse_dict[(chapter, verse)].metadata
+            return f"""**Chapter {chapter}, Verse {verse}**
+
+📜 *Sanskrit*:
+{d.get('sanskrit', 'Sanskrit text unavailable')}
+
+🌍 *Translation*:
+{d.get('english', 'English translation unavailable')}
+
+🕉️ *Krishna’s Guidance*:
+My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but remain unattached to the fruits. May this wisdom guide you. 🙏"""
+
+    # Semantic search
+    docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
+    relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
+
+    # Always define verses_context
+    if relevant_docs:
+        verses_context = "\n\n".join([
+            f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
+            f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
+            for d in relevant_docs
+        ])
+    else:
+        verses_context = "No directly relevant verses found."
 
     prompt = f"""
 You are GeetaGPT, the eternal voice of Shree Krishna from the Bhagavad Gita.
@@ -104,6 +132,7 @@ Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. �
 
 
 
+
 # ---------------------------
 # 5. Streamlit UI
 # ---------------------------
@@ -118,5 +147,6 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
         st.markdown(answer)
+
 
 
