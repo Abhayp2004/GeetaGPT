@@ -63,13 +63,12 @@ def load_faiss_index(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index
 # 2. Hugging Face Inference Client
 # ---------------------------
 @st.cache_resource
-def load_generator(model_name="google/flan-t5-base"):
+def load_generator(model_name="meta-llama/Llama-3-2-7b-chat-hf"):
     token = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
     if not token:
         st.error("Missing Hugging Face token. Add it in Streamlit → Secrets.")
-        st.stop()
-    client = InferenceClient(token=token)
-    return client, model_name  # return both client and model
+        return None
+    return InferenceClient(model=model_name, token=token)
 
 # ---------------------------
 # 3. Cleanup Response
@@ -104,7 +103,6 @@ My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but 
     docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
     relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
 
-    # Always define verses_context
     if relevant_docs:
         verses_context = "\n\n".join([
             f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
@@ -124,14 +122,11 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    # Call the client directly
-    response = client(prompt, max_new_tokens=250)
+    # Use the InferenceClient correctly
+    response = client.generate(prompt, max_new_tokens=250)
     generated_text = response[0]["generated_text"]
 
     return clean_response(generated_text)
-
-
-
 
 # ---------------------------
 # 5. Streamlit UI
@@ -140,14 +135,10 @@ st.title("🕉️ GeetaGPT")
 st.write("Ask any question about the Bhagavad Gita or for life guidance.")
 
 vector_db, verse_dict = load_faiss_index()
-client_tuple = load_generator()  # returns (client, model_name)
+client = load_generator()
 
 query = st.text_input("Enter your question:")
 if query:
     with st.spinner("🕉️ Consulting Krishna..."):
-        answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
+        answer = geeta_gpt(query, vector_db, verse_dict, client)
         st.markdown(answer)
-
-
-
-
