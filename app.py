@@ -63,11 +63,13 @@ def load_faiss_index(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index
 # 2. Hugging Face Inference Client
 # ---------------------------
 @st.cache_resource
-def load_generator(model_name="google/flan-t5-base"):  
+def load_generator(model_name="google/flan-t5-base"):
     token = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
     if not token:
         st.error("Missing Hugging Face token. Add it in Streamlit → Secrets.")
-    return InferenceClient(model=model_name, token=token)
+        st.stop()
+    client = InferenceClient(token=token)
+    return client, model_name  # return both client and model
 
 # ---------------------------
 # 3. Cleanup Response
@@ -80,7 +82,9 @@ def clean_response(text: str) -> str:
 # ---------------------------
 # 4. GeetaGPT Logic
 # ---------------------------
-def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
+def geeta_gpt(query, vector_db, verse_dict, client_tuple, top_k=4, similarity_threshold=0.7):
+    client, model_name = client_tuple
+
     # Direct chapter/verse lookup
     verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
     if verse_pattern:
@@ -120,16 +124,20 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    # Use the client already initialized with model
-    response = client.text_generation(
-    model="meta-llama/Llama-3.2-1B",
-    inputs=prompt,
-    max_new_tokens=250
-)
+    # Use HF InferenceClient correctly
+    result = client.text_generation(
+        model=model_name,
+        inputs=prompt,
+        max_new_tokens=250
+    )
 
+    # The API returns a list of dicts with 'generated_text'
+    if isinstance(result, list) and "generated_text" in result[0]:
+        raw_text = result[0]["generated_text"]
+    else:
+        raw_text = str(result)
 
-
-    return clean_response(response)
+    return clean_response(raw_text)
 
 # ---------------------------
 # 5. Streamlit UI
@@ -138,15 +146,10 @@ st.title("🕉️ GeetaGPT")
 st.write("Ask any question about the Bhagavad Gita or for life guidance.")
 
 vector_db, verse_dict = load_faiss_index()
-client = load_generator()  # default to flan-t5-base (safe)
+client_tuple = load_generator()  # returns (client, model_name)
 
 query = st.text_input("Enter your question:")
 if query:
     with st.spinner("🕉️ Consulting Krishna..."):
-        answer = geeta_gpt(query, vector_db, verse_dict, client)
+        answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
         st.markdown(answer)
-
-
-
-
-
