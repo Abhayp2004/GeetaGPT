@@ -60,14 +60,14 @@ def load_faiss_index(csv_path="geeta_dataset.csv", index_path="geeta_faiss_index
         return build_faiss_index(csv_path, index_path)
 
 # ---------------------------
-# 2. Hugging Face Inference Client
+# 2. Load Hugging Face Inference Client
 # ---------------------------
 @st.cache_resource
-def load_generator(model_name="meta-llama/Llama-3-2-7b-chat-hf"):
+def load_generator(model_name="meta-llama/Llama-3-2-1B"):
     token = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
     if not token:
         st.error("Missing Hugging Face token. Add it in Streamlit → Secrets.")
-        return None
+        st.stop()
     return InferenceClient(model=model_name, token=token)
 
 # ---------------------------
@@ -79,7 +79,7 @@ def clean_response(text: str) -> str:
     return text.strip()
 
 # ---------------------------
-# 4. GeetaGPT Logic
+# 4. GeetaGPT Function
 # ---------------------------
 def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
     # Direct chapter/verse lookup
@@ -103,14 +103,11 @@ My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but 
     docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
     relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
 
-    if relevant_docs:
-        verses_context = "\n\n".join([
-            f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
-            f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
-            for d in relevant_docs
-        ])
-    else:
-        verses_context = "No directly relevant verses found."
+    verses_context = "\n\n".join([
+        f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
+        f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
+        for d in relevant_docs
+    ]) if relevant_docs else "No directly relevant verses found."
 
     prompt = f"""
 You are GeetaGPT, the eternal voice of Shree Krishna from the Bhagavad Gita.
@@ -122,8 +119,11 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    # Use the InferenceClient correctly
-    response = client.generate(prompt, max_new_tokens=250)
+    # Hugging Face InferenceClient usage
+    response = client.text_generation(
+        inputs=prompt,
+        max_new_tokens=250
+    )
     generated_text = response[0]["generated_text"]
 
     return clean_response(generated_text)
