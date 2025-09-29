@@ -120,12 +120,9 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    response = client.text_generation(
-    prompt,
-    model="meta-llama/Llama-3.2-1B",   # explicitly set the model
-    task="text-generation",         # crucial
-    max_new_tokens=250
-)
+    # Use the client already initialized with model
+response = client.text_generation(prompt, max_new_tokens=250)
+
 
     return clean_response(response)
 
@@ -143,4 +140,5 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, client)
         st.markdown(answer)
+
 
