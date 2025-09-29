@@ -121,10 +121,11 @@ Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. ð
 
     # Hugging Face InferenceClient usage
     response = client.text_generation(
-        inputs=prompt,
-        max_new_tokens=250
-    )
-    generated_text = response[0]["generated_text"]
+    prompt,  # positional argument
+    parameters={"max_new_tokens": 250}
+)
+generated_text = response[0]["generated_text"]
+
 
     return clean_response(generated_text)
 
