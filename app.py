@@ -6,6 +6,11 @@ from langchain.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from transformers import pipeline
+import os
+from huggingface_hub import login
+
+login(token=os.environ["HUGGINGFACEHUB_API_TOKEN"])
+
 
 # ---------------------------
 # 1. Build or Load FAISS Index
@@ -162,3 +167,4 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, generator)
         st.markdown(answer)
+
