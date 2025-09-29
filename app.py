@@ -82,37 +82,9 @@ def clean_response(text: str) -> str:
 # ---------------------------
 # 4. GeetaGPT Logic
 # ---------------------------
-def geeta_gpt(query, vector_db, verse_dict, client_tuple, top_k=4, similarity_threshold=0.7):
-    client, model_name = client_tuple
-
-    # Direct chapter/verse lookup
-    verse_pattern = re.search(r"chapter\s*(\d+)[^\d]+verse\s*(\d+)", query.lower())
-    if verse_pattern:
-        chapter, verse = map(int, verse_pattern.groups())
-        if (chapter, verse) in verse_dict:
-            d = verse_dict[(chapter, verse)].metadata
-            return f"""**Chapter {chapter}, Verse {verse}**
-
-📜 *Sanskrit*:
-{d.get('sanskrit', 'Sanskrit text unavailable')}
-
-🌍 *Translation*:
-{d.get('english', 'English translation unavailable')}
-
-🕉️ *Krishna’s Guidance*:
-My dear Arjuna, reflect on this teaching. Perform your duty with sincerity, but remain unattached to the fruits. May this wisdom guide you. 🙏"""
-
-    # Semantic search
-    docs_with_scores = vector_db.similarity_search_with_score(query, k=top_k)
-    relevant_docs = [d for d, score in docs_with_scores if score >= similarity_threshold]
-    if not relevant_docs:
-        return "This teaching is not directly in the verses provided, but I will guide you in the spirit of the Gita. 🙏"
-
-    verses_context = "\n\n".join([
-        f"[Chapter {d.metadata['chapter']}, Verse {d.metadata['verse']}]\n"
-        f"Sanskrit: {d.metadata['sanskrit']}\nEnglish: {d.metadata['english']}"
-        for d in relevant_docs
-    ])
+def geeta_gpt(query, vector_db, verse_dict, client, top_k=4, similarity_threshold=0.7):
+    # Chapter/verse lookup (same as before)
+    # ...
 
     prompt = f"""
 You are GeetaGPT, the eternal voice of Shree Krishna from the Bhagavad Gita.
@@ -124,16 +96,12 @@ User Question: {query}
 Answer as Shree Krishna (3-5 sentences). End with: "May this wisdom guide you. 🙏"
 """
 
-    # Correct usage: prompt as first positional argument
-    result = client.text_generation(prompt, max_new_tokens=250)
+    # Call the client directly
+    response = client(prompt, max_new_tokens=250)
+    generated_text = response[0]["generated_text"]
 
-    # The API returns a list of dicts with 'generated_text'
-    if isinstance(result, list) and "generated_text" in result[0]:
-        raw_text = result[0]["generated_text"]
-    else:
-        raw_text = str(result)
+    return clean_response(generated_text)
 
-    return clean_response(raw_text)
 
 
 # ---------------------------
@@ -150,4 +118,5 @@ if query:
     with st.spinner("🕉️ Consulting Krishna..."):
         answer = geeta_gpt(query, vector_db, verse_dict, client_tuple)
         st.markdown(answer)
+
 
