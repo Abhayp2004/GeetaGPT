@@ -1,8 +1,0 @@
-langchain
-langchain-community
-streamlit
-pandas
-transformers>=4.40
-faiss-cpu
-sentence-transformers
-torch
